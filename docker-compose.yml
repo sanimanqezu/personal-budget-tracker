@@ -1,0 +1,64 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: budget-postgres
+    environment:
+      POSTGRES_DB: budgetdb
+      POSTGRES_USER: budgetuser
+      POSTGRES_PASSWORD: budgetpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U budgetuser -d budgetdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - budget-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: budget-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/budgetdb
+      DB_USERNAME: budgetuser
+      DB_PASSWORD: budgetpass
+      JWT_SECRET: myVerySecretKeyThatIsAtLeast256BitsLongForHmacSha256Algorithm!!
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    networks:
+      - budget-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: budget-frontend
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: change-this-secret-in-production
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    networks:
+      - budget-net
+
+networks:
+  budget-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
