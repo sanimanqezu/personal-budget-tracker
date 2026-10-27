@@ -1,22 +1,36 @@
 # Personal Budget Tracker
 
+[![CI](https://github.com/sanimanqezu/personal-budget-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/sanimanqezu/personal-budget-tracker/actions/workflows/ci.yml)
+
 A full-stack personal finance application built with **Spring Boot** (backend REST API) and **Next.js 15** (frontend). Track income and expenses, visualize spending by category, and manage your monthly budget — all secured with JWT authentication.
 
 ---
 
 ## Tech Stack
 
-| Layer     | Technology                                              |
-|-----------|---------------------------------------------------------|
-| Backend   | Java 17, Spring Boot 3.2.5, Spring Security, JJWT 0.12.3 |
-| Database  | PostgreSQL 16, Flyway migrations                        |
-| ORM       | Spring Data JPA / Hibernate                             |
-| Frontend  | Next.js 15 (App Router), React 19, TypeScript           |
-| Styling   | Tailwind CSS 4, dark mode support                       |
-| State     | Zustand                                                 |
-| Charts    | Recharts (Pie chart for category breakdown)             |
-| Auth      | JWT (stateless, stored in localStorage via Zustand)     |
-| Container | Docker, Docker Compose                                  |
+| Layer     | Technology                                               |
+|-----------|----------------------------------------------------------|
+| Backend   | Java 25, Spring Boot 3.5.16, Spring Security, JJWT 0.12.3 |
+| Database  | PostgreSQL, Flyway migrations                             |
+| ORM       | Spring Data JPA / Hibernate                              |
+| Frontend  | Next.js 15 (App Router), React 19, TypeScript            |
+| Styling   | Tailwind CSS 4, dark mode support                        |
+| State     | Zustand                                                  |
+| Charts    | Recharts (Pie chart for category breakdown)              |
+| Auth      | JWT (stateless, stored in localStorage via Zustand)      |
+| Tests     | JUnit 5, Mockito, AssertJ, Spring MockMvc (H2 in-memory) |
+| Container | Docker, Docker Compose                                   |
+
+---
+
+## Key design points
+
+- **Layered architecture** — controller → service → repository, with Java records as immutable request/response DTOs and static `from(...)` mappers from entities.
+- **Stateless JWT security** — a `OncePerRequestFilter` validates the bearer token and populates the `SecurityContext`; the filter chain is `STATELESS`, CSRF disabled, and auth endpoints are the only public routes.
+- **Per-user data isolation** — every service resolves the authenticated username to a `User` and scopes all reads/writes by `userId` (e.g. `findByIdAndUserId`), so a user can never reach another user's categories or transactions.
+- **Centralized exception handling** — a `@RestControllerAdvice` maps domain exceptions to a consistent `ErrorResponse` body: validation → 400, bad credentials → 401, not found → 404, conflicts → 409.
+- **Aggregation in the database** — monthly and per-category summaries are computed with JPQL aggregate queries rather than in-memory loops; category percentages are derived with `BigDecimal` and `HALF_UP` rounding.
+- **Centralized PostgreSQL** — the backend joins the shared portfolio Postgres via `DB_*` environment variables; schema is owned by Flyway with `ddl-auto: validate`.
 
 ---
 
@@ -50,7 +64,7 @@ personal-budget-tracker/
 │   │   │   └── resources/
 │   │   │       ├── application.yml
 │   │   │       └── db/migration/V1__create_tables.sql
-│   │   └── test/                    # Integration tests (H2 in-memory)
+│   │   └── test/                    # Service unit + controller slice + integration tests
 │   ├── Dockerfile
 │   ├── docker-compose.yml           # Backend-only compose (dev)
 │   └── pom.xml
@@ -84,44 +98,37 @@ personal-budget-tracker/
 
 ### Prerequisites
 
-- Java 17+
-- Maven 3.8+
-- Node.js 20+
-- PostgreSQL 16 **or** Docker
+- Java 25
+- Maven 3.9+
+- Node.js 22+
+- Docker & Docker Compose
 
 ---
 
-### Option 1 — Docker Compose (recommended)
+### 1. Start the centralized PostgreSQL
+
+The backend connects to the shared portfolio PostgreSQL instance over an external Docker network. Bring it up first from the portfolio root:
 
 ```bash
-# Clone the repo
-git clone https://github.com/yourusername/personal-budget-tracker.git
-cd personal-budget-tracker
-
-# Start everything (Postgres + Backend + Frontend)
-docker-compose up --build
-
-# App will be available at:
-#   Frontend:  http://localhost:3000
-#   Backend:   http://localhost:8080
+# in the portfolio-root directory
+docker-compose up -d
 ```
 
 ---
 
-### Option 2 — Run Locally
-
-#### Backend
+### 2. Run the backend
 
 ```bash
 cd backend
 
-# Set environment variables (or use defaults in application.yml)
-export DB_URL=jdbc:postgresql://localhost:5432/budgetdb
-export DB_USERNAME=budgetuser
-export DB_PASSWORD=budgetpass
+# Defaults match the centralized Postgres; override only if needed
+export DB_HOST=localhost
+export DB_PORT=5432
+export DB_NAME=budgetdb
+export DB_USERNAME=postgres
+export DB_PASSWORD=postgres
 export JWT_SECRET=myVerySecretKeyThatIsAtLeast256BitsLongForHmacSha256Algorithm!!
 
-# Run
 mvn spring-boot:run
 ```
 
@@ -147,23 +154,22 @@ The frontend will start on `http://localhost:3000`.
 
 ---
 
-### Running Tests
+### Tests
 
 ```bash
 cd backend
 mvn test
 ```
 
-Tests use H2 in-memory database — no Postgres required. Covers:
+**53 tests**, self-contained — no real database or network required. Three layers:
 
-- Duplicate registration rejection (409)
-- Wrong-password login rejection (401)
-- Protected endpoint without token (403)
-- Category CRUD
-- Transaction creation + monthly summary
-- Transaction deletion + 404 check
-- Category-based percentage summary
-- Month-based transaction filtering
+| Layer | Classes | What it covers |
+|---|---|---|
+| Service (unit) | `AuthServiceTest`, `CategoryServiceTest`, `TransactionServiceTest`, `SummaryServiceTest` | Mockito + AssertJ: happy paths, password hashing, duplicate/conflict detection, not-found cases, month/type filtering, summary maths and percentage rounding, and `BadCredentials` propagation |
+| Controller (slice) | `AuthControllerTest`, `CategoryControllerTest`, `TransactionControllerTest`, `SummaryControllerTest` | `@WebMvcTest` with `@MockitoBean` services: status codes, request delegation, bean-validation → 400, and `GlobalExceptionHandler` mapping to 401/404/409 |
+| Integration | `BudgetTrackerIntegrationTest` | Full `@SpringBootTest` + `MockMvc` over H2: register/login, JWT-protected access (403 without token), category/transaction CRUD, monthly and per-category summaries, and month filtering |
+
+Controller slices run with `@AutoConfigureMockMvc(addFilters = false)` and `@WithMockUser`; the JWT filter is excluded from the slice context. Only the integration test exercises the real security chain.
 
 ---
 
@@ -214,12 +220,14 @@ Tests use H2 in-memory database — no Postgres required. Covers:
 
 ### Backend (`application.yml` / environment)
 
-| Variable      | Default                          | Description              |
-|---------------|----------------------------------|--------------------------|
-| `DB_URL`      | `jdbc:postgresql://localhost:5432/budgetdb` | JDBC URL    |
-| `DB_USERNAME` | `budgetuser`                     | Database user            |
-| `DB_PASSWORD` | `budgetpass`                     | Database password        |
-| `JWT_SECRET`  | _(change in production)_         | HMAC-SHA256 signing key (min 256 bits) |
+| Variable      | Default        | Description                            |
+|---------------|----------------|----------------------------------------|
+| `DB_HOST`     | `localhost`    | PostgreSQL host                        |
+| `DB_PORT`     | `5432`         | PostgreSQL port                        |
+| `DB_NAME`     | `budgetdb`     | Database name                          |
+| `DB_USERNAME` | `postgres`     | Database user                          |
+| `DB_PASSWORD` | `postgres`     | Database password                      |
+| `JWT_SECRET`  | _(change in production)_ | HMAC-SHA256 signing key (min 256 bits) |
 
 ### Frontend (`.env.local`)
 

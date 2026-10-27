@@ -1,5 +1,5 @@
 # --- Build Stage ---
-FROM eclipse-temurin:17-jdk-alpine AS builder
+FROM eclipse-temurin:25-jdk-alpine AS builder
 WORKDIR /app
 
 COPY pom.xml .
@@ -9,7 +9,7 @@ RUN apk add --no-cache maven && \
     mvn clean package -DskipTests -q
 
 # --- Runtime Stage ---
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 WORKDIR /app
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup

@@ -60,7 +60,7 @@ public class SummaryService {
         List<CategorySummaryResponse> responses = new ArrayList<>();
         for (Object[] row : rawResults) {
             String categoryName = (String) row[0];
-            String type = (String) row[1];
+            String type = row[1].toString();
             BigDecimal total = (BigDecimal) row[2];
             double percentage = grandTotal.compareTo(BigDecimal.ZERO) == 0
                     ? 0.0
